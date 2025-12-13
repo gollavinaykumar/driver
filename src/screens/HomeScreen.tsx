@@ -541,7 +541,7 @@ export default function HomeScreen() {
 
   if (loading) {
     return (
-      <View style={[styles.loadingContainer, { paddingTop: insets.top }]}>
+      <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#007bff" />
         <Text style={styles.loadingText}>Getting your location...</Text>
       </View>
@@ -549,7 +549,7 @@ export default function HomeScreen() {
   }
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top }]}>
+    <View style={styles.container}>
       {isActiveTrip ? (
         <>
           <ScrollView
@@ -758,7 +758,7 @@ export default function HomeScreen() {
             </View>
             <View style={styles.emptyState}>
               <Text style={styles.emptyEmoji}>🚚</Text>
-              <Text style={styles.emptyTitle}>No Active Trips</Text>
+              <Text style={styles.emptyTitle}>No's Active Trips</Text>
               <Text style={styles.emptyDescription}>
                 You don't have any active trips assigned at the moment.
               </Text>

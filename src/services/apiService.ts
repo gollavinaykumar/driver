@@ -1,71 +1,105 @@
+import axios, { AxiosError } from 'axios';
 import { getBackendAPI } from '../utils/getAPI';
 import { getToken } from '../utils/getUserToken';
+import { Trip } from '../types/TripInterface';
+import { Load } from '../types/loadInterface';
+import { logger } from '../utils/logger';
 
-const API_KEY = getBackendAPI();
-export const getDriverById = async (id: string) => {
-  try {
-    const token = getToken();
-    const response = await fetch(`${API_KEY}/drivers/${id}`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-    });
+const BASE = getBackendAPI();
+logger.log('🌐 API BASE:', BASE);
 
-    if (!response.ok) {
-      throw new Error(`Failed to get driver: ${response.statusText}`);
+const api = axios.create({
+  baseURL: BASE,
+  timeout: 15000,
+  headers: {
+    'Content-Type': 'application/json',
+  },
+});
+
+api.interceptors.request.use(
+  async config => {
+    try {
+      const token = await getToken();
+      if (token && config.headers) {
+        config.headers.Authorization = `Bearer ${token}`;
+      }
+    } catch (err) {
+      logger.warn('Could not attach token to request:', err);
+    }
+    return config;
+  },
+  error => Promise.reject(error),
+);
+
+api.interceptors.response.use(
+  res => res,
+  (error: AxiosError) => {
+    if (error.response) {
+      // Server responded with error status
+      const responseData = error.response.data as
+        | { message?: string }
+        | undefined;
+      const payload: { message: string } = {
+        message:
+          responseData?.message ||
+          error.message ||
+          `Server error: ${error.response.status}`,
+      };
+      logger.error('API Error Response:', {
+        status: error.response.status,
+        data: error.response.data,
+        message: payload.message,
+      });
+      return Promise.reject(payload);
     }
 
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error('❌ Error on  getting driver:', error);
-    throw error;
+    // Network error or no response
+    const networkError: {
+      message: string;
+      code?: string;
+      isNetworkError: boolean;
+    } = {
+      message: error.message || 'Network error',
+      code: error.code,
+      isNetworkError: true,
+    };
+    logger.error('API Network Error:', networkError);
+    return Promise.reject(networkError);
+  },
+);
+
+export type TripsResponse = {
+  trips: Trip[];
+  loads: Load[];
+};
+
+export const getDriverById = async (id: string) => {
+  try {
+    const res = await api.get(`/drivers/${id}`);
+    return res.data;
+  } catch (err) {
+    logger.error('❌ Error getting driver:', err);
+    throw err;
   }
 };
 
 export const updatePickUPLoadTrip = async (obj: unknown, vehicleId: string) => {
   try {
-    const token = await getToken();
-    const response = await fetch(
-      `${API_KEY}/trips/vehicles/${vehicleId}/ewaybill`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify(obj),
-      },
-    );
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error('creating eway bill got error:', error);
+    const res = await api.post(`/trips/vehicles/${vehicleId}/ewaybill`, obj);
+    return res.data;
+  } catch (err) {
+    logger.error('❌ creating eway bill got error:', err);
+    throw err;
   }
 };
 
 export const updateDropLoadTrip = async (obj: unknown, vehicleId: string) => {
   try {
-    const token = await getToken();
-    const response = await fetch(
-      `${API_KEY}/trips/vehicles/${vehicleId}/invoicebill`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify(obj),
-      },
-    );
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error('creating invoice bill got error:', error);
+    const res = await api.post(`/trips/vehicles/${vehicleId}/invoicebill`, obj);
+    return res.data;
+  } catch (err) {
+    logger.error('❌ creating invoice bill got error:', err);
+    throw err;
   }
 };
 
@@ -76,153 +110,94 @@ export interface userDetails {
 
 export const getTripsByVehicleId = async (vehicleId: string) => {
   try {
-    const token = await getToken();
-    const response = await fetch(`${API_KEY}/trips/driver/${vehicleId}`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-    });
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error('trips getting By  Vehicle id, got error:', error);
+    const res = await api.get<TripsResponse>(`/trips/driver/${vehicleId}`);
+    return res.data;
+  } catch (err) {
+    logger.error('❌ trips getting By Vehicle id, got error:', err);
+    throw err;
   }
 };
 
 export const getSingleVehicleByVehicleId = async (truckId: string) => {
   try {
-    const response = await fetch(`${API_KEY}/trucks/${truckId}`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
-
-    return response.json();
-  } catch (error) {
-    console.log(error);
+    const res = await api.get(`/trucks/${truckId}`);
+    return res.data;
+  } catch (err) {
+    logger.error('❌ getSingleVehicleByVehicleId error:', err);
+    throw err;
   }
 };
 
 export const getTripByVehicleId = async (vehicleId: string) => {
   try {
-    const token = await getToken();
-    const response = await fetch(`${API_KEY}/trips/vehicles/${vehicleId}`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-    });
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error('trips getting By  Vehicle id, got error:', error);
+    const res = await api.get(`/trips/vehicles/${vehicleId}`);
+    return res.data;
+  } catch (err) {
+    logger.error(
+      '❌ trips getting By Vehicle id (vehicles endpoint) error:',
+      err,
+    );
+    throw err;
   }
 };
 
-export const getLoadByLoadId = async (loadId: unknown) => {
-  const token = await getToken();
+export const getLoadByLoadId = async (loadId: string | number) => {
   try {
-    const response = await fetch(`${API_KEY}/myLoads/${loadId}`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-    });
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error('load getting By LoadId, got error:', error);
+    const res = await api.get(`/myLoads/${loadId}`);
+    return res.data;
+  } catch (err) {
+    logger.error('❌ load getting By LoadId, got error:', err);
+    throw err;
   }
 };
 
 export const updateLocationToVehicleAndDriver = async (obj: unknown) => {
   try {
-    const token = await getToken();
-    const response = await fetch(`${API_KEY}/updateLocation`, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-
-      body: JSON.stringify(obj),
-    });
-
-    return response.json();
-  } catch (error) {
-    console.log(error);
+    const res = await api.put(`/updateLocation`, obj);
+    return res.data;
+  } catch (err) {
+    logger.error('❌ updateLocationToVehicleAndDriver error:', err);
+    throw err;
   }
 };
 
 export const checkUser = async (obj: userDetails) => {
   try {
-    const response = await fetch(`${API_KEY}/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(obj),
-    });
-
-    console.log('API_KEY =', API_KEY);
-    console.log('Final URL =', `${API_KEY}/login`);
-
-    console.log('Status:', response.status);
-
-    const text = await response.text();
-    console.log('Raw response:', text);
-
-    if (!response.ok) {
-      throw new Error(`Server error: ${response.status}`);
-    }
-
-    return JSON.parse(text);
-  } catch (error) {
-    console.error('Login error:', error);
+    const res = await api.post(`/login`, obj);
+    return res.data;
+  } catch (err) {
+    logger.error('❌ Login error:', err);
+    throw err;
   }
 };
 
-export async function requestOtp(phone: string) {
+export const requestOtp = async (phone: string) => {
   try {
-    const res = await fetch(`${API_KEY}/login/otp/request`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ phone }),
-    });
-
-    if (!res.ok) {
-      throw await res.json();
-    }
-
-    return await res.json();
+    const res = await api.post(`/login/otp/request`, { phone });
+    return res.data;
   } catch (err) {
-    throw err || { message: 'Failed to request OTP' };
+    logger.error('❌ requestOtp error:', err);
+    throw err;
   }
-}
+};
 
-export async function verifyOtp(phone: string, otp: string) {
+export const verifyOtp = async (phone: string, otp: string) => {
   try {
-    const res = await fetch(`${API_KEY}/login/otp/verify`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ phone, otp }),
-    });
-
-    if (!res.ok) {
-      throw await res.json();
-    }
-
-    return await res.json();
+    logger.log('Verifying OTP for phone:', phone);
+    const res = await api.post(`/login/otp/verify`, { phone, otp });
+    logger.log('OTP verification response:', res.data);
+    return res.data;
   } catch (err) {
-    throw err || { message: 'Failed to verify OTP' };
+    logger.error('❌ verifyOtp error:', err);
+    // Log the full error details for debugging
+    if (err instanceof Error) {
+      logger.error('Error details:', {
+        message: err.message,
+        name: err.name,
+      });
+    }
+    throw err;
   }
-}
+};
+
+export default api;

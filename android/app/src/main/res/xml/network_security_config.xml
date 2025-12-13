@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- HTTPS domain -->
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">qa.goodseva.com</domain>
+        <trust-anchors>
+            <!-- Trust bundled intermediate CA certificate -->
+            <certificates src="@raw/qa_goodseva_cert" />
+            <!-- Trust system certificates -->
+            <certificates src="system" />
+            <!-- Trust user-installed certificates -->
+            <certificates src="user" />
+        </trust-anchors>
+    </domain-config>
+
+    <!-- Local/dev HTTP testing (replace IP with your LAN IP if needed) -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">192.168.0.114</domain>
+    </domain-config>
+</network-security-config>

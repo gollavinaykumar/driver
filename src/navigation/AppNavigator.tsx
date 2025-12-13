@@ -8,7 +8,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import LoginScreen from '../screens/LoginScreen';
 import TabNavigator from './TabNavigator';
-import LoginHeader from '../components/LoginHeader';
+
 import Header from '../components/Header';
 
 // Define your root stack param list
@@ -75,7 +75,6 @@ const AppNavigator = () => {
           <Stack.Screen name="Login">
             {props => (
               <>
-                <LoginHeader />
                 <LoginScreen {...props} updateUserToken={updateUserToken} />
               </>
             )}

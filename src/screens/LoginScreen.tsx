@@ -15,6 +15,7 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { checkUser, requestOtp, verifyOtp } from '../services/apiService';
 import { getBackendAPI } from '../utils/getAPI';
+import { logger } from '../utils/logger';
 
 interface LoginScreenProps {
   updateUserToken: (token: string | null) => void;
@@ -72,10 +73,29 @@ export default function LoginScreen({ updateUserToken }: LoginScreenProps) {
       await AsyncStorage.setItem('authToken', res.token);
       await AsyncStorage.setItem('userData', JSON.stringify(res));
 
-      console.log('Login successful, updating user token');
-    } catch (error) {
-      console.error('Login error:', error);
-      Alert.alert('Error', 'Login failed. Please try again.');
+      logger.log('Login successful, updating user token');
+    } catch (error: any) {
+      logger.error('Login error:', error);
+      let errorMessage = 'Login failed. Please try again.';
+
+      if (error?.message) {
+        errorMessage = error.message;
+      } else if (error?.response?.data?.message) {
+        errorMessage = error.response.data.message;
+      } else if (typeof error === 'string') {
+        errorMessage = error;
+      }
+
+      // Show more details for network errors
+      if (
+        error?.isNetworkError ||
+        error?.code === 'NETWORK_ERROR' ||
+        errorMessage.includes('Network')
+      ) {
+        errorMessage = `Network Error: ${errorMessage}\n\nPlease check:\n- Internet connection\n- API server is accessible`;
+      }
+
+      Alert.alert('Login Error', errorMessage);
     } finally {
       setLoading(false);
     }
@@ -107,13 +127,13 @@ export default function LoginScreen({ updateUserToken }: LoginScreenProps) {
     try {
       const response = await requestOtp(mobileNumber);
 
-      console.log('OTP sent successfully:', response);
+      logger.log('OTP sent successfully:', response);
 
       setOtpSent(true);
       setShowOtpModal(true);
       Alert.alert('Success', 'OTP sent to your mobile number');
     } catch (error) {
-      console.error('Send OTP error:', error);
+      logger.error('Send OTP error:', error);
       Alert.alert('Error', 'Failed to send OTP. Please try again.');
     } finally {
       setOtpLoading(false);
@@ -131,21 +151,29 @@ export default function LoginScreen({ updateUserToken }: LoginScreenProps) {
     try {
       const response = await verifyOtp(mobileNumber, otp);
 
-      console.log('OTP verified successfully:', response);
+      logger.log('OTP verified successfully:', response);
 
-      if (response.type === 'DRIVER') {
-        await AsyncStorage.setItem('authToken', response.token);
+      const userType = response.type?.toUpperCase?.() || response.type;
+      if (userType === 'DRIVER' || userType === 'USER') {
+        // Persist token and user data
+        if (response.token) {
+          await AsyncStorage.setItem('authToken', response.token);
+        }
         await AsyncStorage.setItem('userData', JSON.stringify(response));
-        updateUserToken(response.token);
+        updateUserToken(response.token || null);
 
         setShowOtpModal(false);
         Alert.alert('Success', 'Login successful!');
       } else {
-        Alert.alert('Error', 'Invalid OTP. Please try again.');
+        Alert.alert('Error', 'Invalid account type.');
       }
-    } catch (error) {
-      console.error('Verify OTP error:', error);
-      Alert.alert('Error', 'OTP verification failed. Please try again.');
+    } catch (error: any) {
+      logger.error('Verify OTP error:', error);
+      const message =
+        error?.message ||
+        error?.response?.data?.message ||
+        'OTP verification failed. Please try again.';
+      Alert.alert('OTP Verification Error', message);
     } finally {
       setOtpLoading(false);
     }
@@ -172,7 +200,7 @@ export default function LoginScreen({ updateUserToken }: LoginScreenProps) {
           source={require('../assets/images/goodseva-logo.png')}
           style={styles.companyIcon}
         />
-        <Text style={styles.welcomeText}>Welcome Back!</Text>
+        <Text style={styles.welcomeText}>Welcome To Goodseva</Text>
         <Text style={styles.subtitle}>Sign in to continue your journey</Text>
       </View>
 
@@ -225,10 +253,10 @@ export default function LoginScreen({ updateUserToken }: LoginScreenProps) {
           // Password Login Form
           <View style={styles.formContainer}>
             <View style={styles.inputGroup}>
-              <Text style={styles.label}>Email Address</Text>
+              <Text style={styles.label}>Email Address (or) Phone number</Text>
               <TextInput
                 style={styles.textInput}
-                placeholder="Enter your email"
+                placeholder="Enter your email or phone number"
                 value={email}
                 onChangeText={setEmail}
                 autoCapitalize="none"
@@ -249,9 +277,9 @@ export default function LoginScreen({ updateUserToken }: LoginScreenProps) {
               />
             </View>
 
-            <TouchableOpacity style={styles.forgotPassword}>
+            {/* <TouchableOpacity style={styles.forgotPassword}>
               <Text style={styles.forgotPasswordText}>Forgot Password?</Text>
-            </TouchableOpacity>
+            </TouchableOpacity> */}
 
             <TouchableOpacity
               style={[
