@@ -75,6 +75,7 @@ export default function ProfileScreen({ updateUserToken }: ProfileScreenProps) {
             await AsyncStorage.removeItem('userData');
             updateUserToken(null);
             socket?.disconnect();
+            socket?.emit('leaveTrackingRoom', { driverId: driver?.id });
             logger.log('Logout successful');
           } catch (error) {
             logger.error('Error during logout:', error);

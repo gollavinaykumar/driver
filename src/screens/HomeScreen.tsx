@@ -1,4 +1,10 @@
-import React, { useEffect, useState, useCallback, useContext } from 'react';
+import React, {
+  useEffect,
+  useState,
+  useCallback,
+  useContext,
+  useRef,
+} from 'react';
 import {
   View,
   Text,
@@ -11,6 +17,7 @@ import {
   PermissionsAndroid,
   Platform,
   AppState,
+  RefreshControl,
 } from 'react-native';
 import Geolocation from '@react-native-community/geolocation';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -37,11 +44,36 @@ import { useDriverStore } from '../store/DriverStore';
 import { getMapsAPIKey } from '../utils/getMapsApiKey';
 import { SocketContext } from '../utils/SocketContext';
 import { Load } from '../types/loadInterface';
+import { logger } from '../utils/logger';
 
 interface LocationCoords {
   lat: number;
   lng: number;
 }
+
+const toRad = (value: number): number => (value * Math.PI) / 180;
+
+// Haversine distance between two coordinates in meters
+const calculateDistanceMeters = (
+  a: LocationCoords,
+  b: LocationCoords,
+): number => {
+  const R = 6371000; // Earth radius in meters
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+
+  const lat1 = toRad(a.lat);
+  const lat2 = toRad(b.lat);
+
+  const sinDLat = Math.sin(dLat / 2);
+  const sinDLng = Math.sin(dLng / 2);
+
+  const h =
+    sinDLat * sinDLat + Math.cos(lat1) * Math.cos(lat2) * sinDLng * sinDLng;
+
+  const c = 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+  return R * c;
+};
 
 interface Driver {
   id: string;
@@ -70,6 +102,7 @@ export default function HomeScreen() {
   const [location, setLocation] = useState('Fetching location...');
   const [coords, setCoords] = useState<LocationCoords | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
   const [distance, setDistance] = useState<string | null>(null);
   const [duration, setDuration] = useState<string | null>(null);
@@ -86,6 +119,14 @@ export default function HomeScreen() {
   const [deliveryPin, setDeliveryPin] = useState('');
 
   const [pickedLoad, setPickedLoad] = useState(false);
+  const hasJoinedTrackingRoomRef = useRef(false);
+  const joinRoomTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastJoinAttemptRef = useRef<number>(0);
+
+  // Throttle backend location updates and initial profile fetch
+  const lastBackendLocationRef = React.useRef<LocationCoords | null>(null);
+  const lastBackendLocationTimeRef = React.useRef<number | null>(null);
+  const hasLoadedDriverDataRef = React.useRef(false);
 
   const setVehicleForStore = useVehicleStore(state => state.setVehicle);
   const setProfileForStore = useDriverStore(state => state.setDriver);
@@ -97,8 +138,18 @@ export default function HomeScreen() {
   const socket = socketContext?.socket;
 
   const requestLocationPermission = useCallback(async (): Promise<boolean> => {
-    if (Platform.OS === 'android') {
-      try {
+    try {
+      if (Platform.OS === 'android') {
+        // Check if foreground location permission is already granted
+        const hasPermission = await PermissionsAndroid.check(
+          PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+        );
+
+        if (hasPermission) {
+          return true;
+        }
+
+        // Request foreground location permission only
         const foregroundGranted = await PermissionsAndroid.request(
           PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
           {
@@ -110,31 +161,74 @@ export default function HomeScreen() {
           },
         );
 
-        let backgroundGranted = PermissionsAndroid.RESULTS.GRANTED;
-        if (Platform.Version >= 29) {
-          backgroundGranted = await PermissionsAndroid.request(
-            PermissionsAndroid.PERMISSIONS.ACCESS_BACKGROUND_LOCATION,
-            {
-              title: 'Background Location Permission',
-              message:
-                'This app needs access to your location in the background to track trips continuously.',
-              buttonNeutral: 'Ask Me Later',
-              buttonNegative: 'Cancel',
-              buttonPositive: 'OK',
-            },
-          );
+        // Handle different permission results
+        if (foregroundGranted === PermissionsAndroid.RESULTS.DENIED) {
+          logger.warn('Location permission denied by user');
+          return false;
         }
 
-        return (
-          foregroundGranted === PermissionsAndroid.RESULTS.GRANTED &&
-          backgroundGranted === PermissionsAndroid.RESULTS.GRANTED
-        );
-      } catch (err) {
-        console.warn('Permission error:', err);
+        if (foregroundGranted === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN) {
+          logger.warn('Location permission permanently denied');
+          Alert.alert(
+            'Location Permission Required',
+            'Location permission is required for trip tracking. Please enable it in app settings.',
+            [
+              { text: 'Cancel', style: 'cancel' },
+              {
+                text: 'Open Settings',
+                onPress: () => Linking.openSettings(),
+              },
+            ],
+          );
+          return false;
+        }
+
+        // Foreground permission granted – we do NOT request background permission.
+        // Foreground is enough for current app behavior and avoids extra MIUI dialogs.
+        if (foregroundGranted === PermissionsAndroid.RESULTS.GRANTED) {
+          return true;
+        }
+
         return false;
+      } else if (Platform.OS === 'ios') {
+        // iOS permission handling
+        return new Promise(resolve => {
+          Geolocation.requestAuthorization(
+            () => {
+              // Permission granted
+              resolve(true);
+            },
+            error => {
+              // Permission denied
+              logger.error('iOS location permission error:', error);
+              Alert.alert(
+                'Location Permission Required',
+                'Location permission is required for trip tracking. Please enable it in Settings.',
+                [
+                  {
+                    text: 'Cancel',
+                    style: 'cancel',
+                    onPress: () => resolve(false),
+                  },
+                  {
+                    text: 'Open Settings',
+                    onPress: () => {
+                      Linking.openSettings();
+                      resolve(false);
+                    },
+                  },
+                ],
+              );
+            },
+          );
+        });
       }
+
+      return false;
+    } catch (err) {
+      logger.error('Permission request error:', err);
+      return false;
     }
-    return true;
   }, []);
 
   const reverseGeocodeWithGoogle = useCallback(
@@ -151,7 +245,7 @@ export default function HomeScreen() {
         }
         return `Lat: ${lat.toFixed(6)}, Lng: ${lng.toFixed(6)}`;
       } catch (error) {
-        console.error('Google Geocoding error:', error);
+        logger.error('Google Geocoding error:', error);
         return `Lat: ${lat.toFixed(6)}, Lng: ${lng.toFixed(6)}`;
       }
     },
@@ -177,137 +271,329 @@ export default function HomeScreen() {
           setDuration(leg.duration.text);
         }
       } catch (error) {
-        console.error('Error fetching trip details:', error);
+        logger.error('Error fetching trip details:', error);
       }
     },
     [],
   );
 
+  // Debounced socket room management to prevent rapid join/leave cycles
+  useEffect(() => {
+    if (!socket || !driver?.id) {
+      return;
+    }
+
+    // Debounce room changes to prevent rapid fire
+    const MIN_JOIN_INTERVAL = 5000; // 5 seconds minimum between changes
+    const now = Date.now();
+
+    if (now - lastJoinAttemptRef.current < MIN_JOIN_INTERVAL) {
+      // Too soon, schedule for later
+      if (joinRoomTimeoutRef.current) {
+        clearTimeout(joinRoomTimeoutRef.current);
+      }
+
+      joinRoomTimeoutRef.current = setTimeout(() => {
+        handleRoomManagement();
+      }, MIN_JOIN_INTERVAL - (now - lastJoinAttemptRef.current));
+
+      return;
+    }
+
+    handleRoomManagement();
+    lastJoinAttemptRef.current = now;
+
+    function handleRoomManagement() {
+      if (isActiveTrip && !hasJoinedTrackingRoomRef.current && driver) {
+        // Join room
+        logger.log('🔄 Joining tracking room for driver:', driver.id);
+        socket?.emit('joinTrackingRoom', {
+          driverId: driver.id,
+        });
+        hasJoinedTrackingRoomRef.current = true;
+
+        socket?.on('liveDriverLocation', locationData => {
+          logger.log(
+            'Received live location update from server:',
+            locationData,
+          );
+        });
+      } else if (!isActiveTrip && hasJoinedTrackingRoomRef.current && driver) {
+        // Leave room
+        logger.log('🔄 Leaving tracking room for driver:', driver.id);
+        socket?.emit('leaveTrackingRoom', { driverId: driver.id });
+        socket?.off('liveDriverLocation');
+        hasJoinedTrackingRoomRef.current = false;
+      }
+    }
+
+    // Cleanup
+    return () => {
+      if (joinRoomTimeoutRef.current) {
+        clearTimeout(joinRoomTimeoutRef.current);
+      }
+
+      // Only cleanup socket listeners, don't emit leave here
+      socket.off('liveDriverLocation');
+    };
+  }, [socket, driver?.id, isActiveTrip, driver]);
+
+  // Component unmount cleanup
+  useEffect(() => {
+    return () => {
+      if (joinRoomTimeoutRef.current) {
+        clearTimeout(joinRoomTimeoutRef.current);
+      }
+
+      // Cleanup socket on unmount
+      if (socket && driver?.id && hasJoinedTrackingRoomRef.current) {
+        logger.log('🧹 Cleaning up socket room on unmount');
+        socket.emit('leaveTrackingRoom', { driverId: driver.id });
+        socket.off('liveDriverLocation');
+        hasJoinedTrackingRoomRef.current = false;
+      }
+    };
+  }, [socket, driver?.id]);
+
+  // Modify the setupBackgroundLocationUpdates function to emit location via socket
+  const setupBackgroundLocationUpdates = useCallback((): number | null => {
+    if (!isActiveTrip || !driver?.id) return null;
+
+    try {
+      const watchId = Geolocation.watchPosition(
+        position => {
+          try {
+            const { latitude, longitude } = position.coords;
+            setCoords({ lat: latitude, lng: longitude });
+
+            reverseGeocodeWithGoogle(latitude, longitude)
+              .then(address => {
+                setLocation(address);
+              })
+              .catch(err => {
+                logger.warn('Geocoding error in watchPosition:', err);
+                setLocation(
+                  `Lat: ${latitude.toFixed(6)}, Lng: ${longitude.toFixed(6)}`,
+                );
+              });
+
+            // Send location to the tracking room via "sendDriverLocation" event
+            if (
+              driver?.id &&
+              socket?.connected &&
+              hasJoinedTrackingRoomRef.current
+            ) {
+              try {
+                socket?.emit('sendDriverLocation', {
+                  driverId: driver.id,
+                  lat: latitude,
+                  lng: longitude,
+                });
+
+                logger.log('📤 Sent location to server:', {
+                  driverId: driver.id,
+                  lat: latitude,
+                  lng: longitude,
+                  socketConnected: socket?.connected,
+                  hasJoinedRoom: hasJoinedTrackingRoomRef.current,
+                });
+
+                logger.log('📍 Location sent to tracking room:', {
+                  driverId: driver.id,
+                  latitude,
+                  longitude,
+                });
+              } catch (trackingSocketError) {
+                logger.error(
+                  'Error sending location to tracking room:',
+                  trackingSocketError,
+                );
+              }
+            }
+          } catch (err) {
+            logger.error('Error in watchPosition callback:', err);
+          }
+        },
+        error => {
+          logger.error('Background location error:', error);
+
+          // If permission denied, stop watching
+          if (error.code === error.PERMISSION_DENIED) {
+            logger.warn(
+              'Location permission denied, stopping background updates',
+            );
+            if (locationWatchId !== null) {
+              try {
+                Geolocation.clearWatch(locationWatchId);
+                setLocationWatchId(null);
+              } catch (clearError) {
+                logger.error('Error clearing watch:', clearError);
+              }
+            }
+          }
+        },
+        {
+          enableHighAccuracy: true,
+          distanceFilter: 10,
+          interval: 20000,
+          fastestInterval: 15000,
+        },
+      );
+
+      return watchId;
+    } catch (err) {
+      logger.error('Error setting up background location updates:', err);
+      return null;
+    }
+  }, [
+    isActiveTrip,
+    reverseGeocodeWithGoogle,
+    driver?.id,
+    socket,
+    locationWatchId,
+  ]);
+
+  // Also emit location when manually fetching location (not just in background updates)
   const fetchLocationWithRetry = useCallback(
     async (retryCount = 0): Promise<void> => {
       try {
         const hasPermission = await requestLocationPermission();
         if (!hasPermission) {
-          setLocation('Location permission required');
-          setLoading(false);
+          setLocation(
+            'Location permission required. Please enable in settings.',
+          );
           return;
         }
 
         return new Promise(resolve => {
-          Geolocation.getCurrentPosition(
-            async position => {
-              const { latitude, longitude } = position.coords;
-              setCoords({ lat: latitude, lng: longitude });
+          try {
+            Geolocation.getCurrentPosition(
+              async position => {
+                try {
+                  const { latitude, longitude } = position.coords;
+                  setCoords({ lat: latitude, lng: longitude });
 
-              try {
-                const address = await reverseGeocodeWithGoogle(
-                  latitude,
-                  longitude,
-                );
-                setLocation(address);
-              } catch (geocodeError) {
-                setLocation(
-                  `Lat: ${latitude.toFixed(6)}, Lng: ${longitude.toFixed(6)}`,
-                );
-              }
+                  try {
+                    const address = await reverseGeocodeWithGoogle(
+                      latitude,
+                      longitude,
+                    );
+                    setLocation(address);
+                  } catch (geocodeError) {
+                    logger.warn('Geocoding error:', geocodeError);
+                    setLocation(
+                      `Lat: ${latitude.toFixed(6)}, Lng: ${longitude.toFixed(
+                        6,
+                      )}`,
+                    );
+                  }
 
-              setLoading(false);
-              resolve();
-            },
-            error => {
-              if (retryCount < 2) {
-                setTimeout(() => {
-                  fetchLocationWithRetry(retryCount + 1);
-                }, 2000);
-                return;
-              }
+                  // Send location to tracking room when manually fetched
+                  if (
+                    driver?.id &&
+                    socket?.connected &&
+                    isActiveTrip &&
+                    hasJoinedTrackingRoomRef.current
+                  ) {
+                    try {
+                      socket.emit('sendDriverLocation', {
+                        driverId: driver.id,
+                        lat: latitude,
+                        lng: longitude,
+                      });
 
-              let errorMessage = 'Failed to get location';
-              switch (error.code) {
-                case error.PERMISSION_DENIED:
-                  errorMessage = 'Location permission denied';
-                  break;
-                case error.POSITION_UNAVAILABLE:
-                  errorMessage = 'Location services disabled';
-                  break;
-                case error.TIMEOUT:
-                  errorMessage = 'Location request timeout';
-                  break;
-                default:
-                  errorMessage = 'Location unavailable';
-              }
+                      logger.log('📍 Manual location sent to tracking room:', {
+                        driverId: driver.id,
+                        latitude,
+                        longitude,
+                      });
+                    } catch (socketError) {
+                      logger.error(
+                        'Error sending manual location:',
+                        socketError,
+                      );
+                    }
+                  }
 
-              setLocation(errorMessage);
-              setLoading(false);
-              resolve();
-            },
-            {
-              enableHighAccuracy: true,
-              timeout: 15000,
-              maximumAge: 10000,
-            },
-          );
+                  resolve();
+                } catch (err) {
+                  logger.error('Error processing location:', err);
+                  setLocation('Error processing location');
+                  resolve();
+                }
+              },
+              error => {
+                logger.error('Location error:', error);
+
+                // Don't retry on permission denied
+                if (error.code === error.PERMISSION_DENIED) {
+                  setLocation(
+                    'Location permission denied. Please enable in settings.',
+                  );
+                  resolve();
+                  return;
+                }
+
+                // Retry for other errors
+                if (retryCount < 2) {
+                  setTimeout(() => {
+                    fetchLocationWithRetry(retryCount + 1);
+                  }, 2000);
+                  return;
+                }
+
+                let errorMessage = 'Failed to get location';
+                switch (error.code) {
+                  case error.PERMISSION_DENIED:
+                    errorMessage = 'Location permission denied';
+                    break;
+                  case error.POSITION_UNAVAILABLE:
+                    errorMessage = 'Location services disabled';
+                    break;
+                  case error.TIMEOUT:
+                    errorMessage = 'Location request timeout';
+                    break;
+                  default:
+                    errorMessage = 'Location unavailable';
+                }
+
+                setLocation(errorMessage);
+                resolve();
+              },
+              {
+                enableHighAccuracy: true,
+                timeout: 15000,
+                maximumAge: 10000,
+              },
+            );
+          } catch (err) {
+            logger.error('Geolocation.getCurrentPosition error:', err);
+            setLocation('Location service error');
+            resolve();
+          }
         });
       } catch (error) {
+        logger.error('fetchLocationWithRetry error:', error);
         setLocation('Location error occurred');
-        setLoading(false);
       }
     },
-    [requestLocationPermission, reverseGeocodeWithGoogle],
+    [
+      requestLocationPermission,
+      reverseGeocodeWithGoogle,
+      driver?.id,
+      socket,
+      isActiveTrip,
+    ],
   );
 
-  // Setup background location updates - Every 20 seconds
-  const setupBackgroundLocationUpdates = useCallback((): number | null => {
-    if (!isActiveTrip) return null;
-
-    const watchId = Geolocation.watchPosition(
-      position => {
-        const { latitude, longitude } = position.coords;
-        setCoords({ lat: latitude, lng: longitude });
-
-        reverseGeocodeWithGoogle(latitude, longitude).then(address => {
-          setLocation(address);
-        });
-
-        // Send location to shipper and owner via socket
-        if (driver?.id && socket?.connected && load?.shipperId) {
-          const ownerId = driver?.ownerId;
-
-          socket.emit('sendDriverLocationToShipperAndOwner', {
-            lat: latitude,
-            lng: longitude,
-            driverOwnerId: ownerId,
-            ShipperId: load.shipperId,
-          });
-
-          console.log('📍 Location sent via socket:', {
-            latitude,
-            longitude,
-            ownerId,
-            shipperId: load.shipperId,
-          });
-        }
-      },
-      error => {
-        console.error('Background location error:', error);
-      },
-      {
-        enableHighAccuracy: true,
-        distanceFilter: 10,
-        interval: 20000,
-        fastestInterval: 15000,
-      },
-    );
-
-    return watchId;
-  }, [
-    isActiveTrip,
-    reverseGeocodeWithGoogle,
-    driver?.id,
-    driver?.ownerId,
-    socket,
-    load?.shipperId,
-  ]);
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await fetchLocationWithRetry();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [fetchLocationWithRetry]);
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', nextAppState => {
@@ -340,20 +626,30 @@ export default function HomeScreen() {
     if (isActiveTrip) {
       // Start background location updates
       const watchId = setupBackgroundLocationUpdates();
-      setLocationWatchId(watchId);
+      if (watchId !== null) {
+        setLocationWatchId(watchId);
+      }
 
       fetchLocationWithRetry();
     } else {
       // Stop background location updates
       if (locationWatchId !== null) {
-        Geolocation.clearWatch(locationWatchId);
-        setLocationWatchId(null);
+        try {
+          Geolocation.clearWatch(locationWatchId);
+          setLocationWatchId(null);
+        } catch (err) {
+          logger.error('Error clearing watch:', err);
+        }
       }
     }
 
     return () => {
       if (locationWatchId !== null) {
-        Geolocation.clearWatch(locationWatchId);
+        try {
+          Geolocation.clearWatch(locationWatchId);
+        } catch (err) {
+          logger.error('Error clearing watch in cleanup:', err);
+        }
       }
     };
   }, [
@@ -419,7 +715,7 @@ export default function HomeScreen() {
         Alert.alert('Error', 'Error updating trip status.');
       }
     } catch (error) {
-      console.error('Error updating trip status:', error);
+      logger.error('Error updating trip status:', error);
       Alert.alert('Error', 'Failed to update status.');
     }
   };
@@ -458,7 +754,7 @@ export default function HomeScreen() {
         Alert.alert('Error', 'Error updating trip status.');
       }
     } catch (error) {
-      console.error('Error updating trip status:', error);
+      logger.error('Error updating trip status:', error);
       Alert.alert('Error', 'Failed to update status.');
     }
   };
@@ -469,32 +765,36 @@ export default function HomeScreen() {
     Linking.openURL(url);
   };
 
-  useEffect(() => {
-    const fetchDriverData = async (): Promise<void> => {
-      try {
-        const userData = await getUserData();
-        const driverRes = await getDriverById(userData?.userId);
-        const vehicleRes = await getSingleVehicleByVehicleId(
-          driverRes.vehicleId,
-        );
-        const tripRes = await getTripByVehicleId(vehicleRes?.id);
+  const fetchDriverData = useCallback(async (): Promise<void> => {
+    try {
+      const userData = await getUserData();
+      const driverRes = await getDriverById(userData?.userId);
+      const vehicleRes = await getSingleVehicleByVehicleId(driverRes.vehicleId);
+      const tripRes = await getTripByVehicleId(vehicleRes?.id);
 
-        if (tripRes.message !== 'Trip not found for this vehicle') {
-          setTrip(tripRes);
-          setIsActiveTrip(true);
-        } else {
-          setIsActiveTrip(false);
-        }
+      // Check if trip exists and has a valid status
+      const hasActiveTrip =
+        tripRes &&
+        tripRes.message !== 'Trip not found for this vehicle' &&
+        tripRes.id; // Ensure trip has an ID
 
-        if (vehicleRes?.id) {
-          setVehicle(vehicleRes);
-          setVehicleForStore(vehicleRes);
-        }
-        if (driverRes?.id) {
-          setDriver(driverRes);
-          setProfileForStore(driverRes);
-        }
+      // Only update if state actually changed
+      setIsActiveTrip(prev => {
+        const newValue = !!hasActiveTrip;
+        return prev !== newValue ? newValue : prev;
+      });
 
+      if (vehicleRes?.id) {
+        setVehicle(vehicleRes);
+        setVehicleForStore(vehicleRes);
+      }
+      if (driverRes?.id) {
+        setDriver(driverRes);
+        setProfileForStore(driverRes);
+      }
+
+      if (hasActiveTrip) {
+        setTrip(tripRes);
         const loadRes = await getLoadByLoadId(tripRes.loadId);
         if (loadRes?.id) setLoad(loadRes);
 
@@ -504,13 +804,16 @@ export default function HomeScreen() {
             { lat: loadRes.destination.lat, lng: loadRes.destination.lng },
           );
         }
-      } catch (error) {
-        console.error('Error fetching driver data:', error);
+      } else {
+        // Clear trip-related data when no active trip
+        setTrip(null);
+        setLoad(null);
+        setDistance(null);
+        setDuration(null);
       }
-    };
-
-    if (coords) {
-      fetchDriverData();
+    } catch (error) {
+      logger.error('Error fetching driver data:', error);
+      setIsActiveTrip(false);
     }
   }, [
     coords,
@@ -520,19 +823,52 @@ export default function HomeScreen() {
   ]);
 
   useEffect(() => {
+    if (!coords) {
+      return;
+    }
+
+    // Load driver/vehicle/trip only once after we have an initial coordinate.
+    if (!hasLoadedDriverDataRef.current) {
+      hasLoadedDriverDataRef.current = true;
+      fetchDriverData();
+    }
+  }, [coords, fetchDriverData]);
+
+  useEffect(() => {
     const updateBackendLocation = async (): Promise<void> => {
-      if (coords && driver?.id) {
-        try {
-          await updateLocationToVehicleAndDriver({
-            tripId: trip?.id,
-            lat: coords.lat,
-            lng: coords.lng,
-            driverId: driver.id,
-            vehicleId: vehicle?.id,
-          });
-        } catch (error) {
-          console.error('Error updating location:', error);
+      if (!coords || !driver?.id) {
+        return;
+      }
+
+      const now = Date.now();
+      const lastCoords = lastBackendLocationRef.current;
+      const lastTime = lastBackendLocationTimeRef.current;
+
+      // Only send update if driver moved significantly OR enough time passed
+      const MIN_TIME_DIFF_MS = 2 * 60 * 1000; // 2 minutes
+      const MIN_DISTANCE_METERS = 300; // 300 meters
+
+      if (lastCoords && lastTime) {
+        const timeDiff = now - lastTime;
+        const dist = calculateDistanceMeters(lastCoords, coords); // Renamed to avoid shadowing
+
+        if (timeDiff < MIN_TIME_DIFF_MS && dist < MIN_DISTANCE_METERS) {
+          return;
         }
+      }
+
+      try {
+        await updateLocationToVehicleAndDriver({
+          tripId: trip?.id,
+          lat: coords.lat,
+          lng: coords.lng,
+          driverId: driver.id,
+          vehicleId: vehicle?.id,
+        });
+        lastBackendLocationRef.current = coords;
+        lastBackendLocationTimeRef.current = now;
+      } catch (error) {
+        logger.error('Error updating location:', error);
       }
     };
 
@@ -556,6 +892,9 @@ export default function HomeScreen() {
             style={styles.scrollView}
             contentContainerStyle={styles.scrollContent}
             showsVerticalScrollIndicator={false}
+            refreshControl={
+              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+            }
           >
             {/* Location Display */}
             <View style={styles.locationCard}>
@@ -675,11 +1014,6 @@ export default function HomeScreen() {
 
           {coords && load?.destination && (
             <TouchableOpacity style={styles.fab} onPress={openGoogleMaps}>
-              {/* <MaterialIcons name="navigation" size={24} color="#ffffff" /> */}
-
-              {/* 
-              <MaterialIcons name="directions" size={44} /> */}
-
               <MaterialIcons name="alt-route" size={44} />
             </TouchableOpacity>
           )}
@@ -741,6 +1075,9 @@ export default function HomeScreen() {
             { paddingTop: insets.top },
           ]}
           showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+          }
         >
           <View style={styles.emptyCard}>
             <View style={styles.locationCard}>
@@ -943,9 +1280,6 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 6,
     elevation: 6,
-  },
-  fabText: {
-    fontSize: 24,
   },
   emptyContainer: {
     flex: 1,

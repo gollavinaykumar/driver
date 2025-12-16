@@ -6,13 +6,14 @@ import { getBackendAPI } from './getAPI';
 let socket: Socket<DefaultEventsMap, DefaultEventsMap> | null = null;
 
 export const getSocket = (): Socket<DefaultEventsMap, DefaultEventsMap> => {
-  const backendURL = getBackendAPI();
+  // Remove any trailing /api to hit the socket root
+  const backendURL = getBackendAPI().replace(/\/api\/?$/, '');
   if (!socket) {
     socket = io(backendURL, {
       path: '/socket.io',
       transports: ['websocket'],
       withCredentials: true,
-      autoConnect: true,
+      autoConnect: false,
       reconnection: true,
       reconnectionAttempts: Infinity,
     });

@@ -15,6 +15,6 @@
 
     <!-- Local/dev HTTP testing (replace IP with your LAN IP if needed) -->
     <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="false">192.168.0.114</domain>
+        <domain includeSubdomains="false">192.168.0.109</domain>
     </domain-config>
 </network-security-config>

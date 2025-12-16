@@ -10,6 +10,7 @@ import LoginScreen from '../screens/LoginScreen';
 import TabNavigator from './TabNavigator';
 
 import Header from '../components/Header';
+import { getSocket } from '../utils/socket';
 
 // Define your root stack param list
 export type RootStackParamList = {
@@ -43,6 +44,21 @@ const AppNavigator = () => {
 
     checkLoginStatus();
   }, []);
+
+  // When userToken changes, attach it to socket and connect
+  useEffect(() => {
+    const socket = getSocket();
+    if (userToken) {
+      socket.auth = { token: userToken }; // raw token, no Bearer
+      if (!socket.connected) {
+        socket.connect();
+      }
+    } else {
+      if (socket.connected) {
+        socket.disconnect();
+      }
+    }
+  }, [userToken]);
 
   if (isLoading) {
     return (
