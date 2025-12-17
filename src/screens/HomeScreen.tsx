@@ -38,6 +38,8 @@ import {
 } from '../services/apiService';
 
 import { getUserData } from '../utils/getUserData';
+import { getToken } from '../utils/getUserToken';
+import { getBackendAPI } from '../utils/getAPI';
 import PinInputModal from '../components/common/PinInputModal';
 import { useVehicleStore } from '../store/VehicleStore';
 import { useDriverStore } from '../store/DriverStore';
@@ -45,6 +47,10 @@ import { getMapsAPIKey } from '../utils/getMapsApiKey';
 import { SocketContext } from '../utils/SocketContext';
 import { Load } from '../types/loadInterface';
 import { logger } from '../utils/logger';
+import {
+  startBackgroundLocationService,
+  stopBackgroundLocationService,
+} from '../native/LocationService';
 
 interface LocationCoords {
   lat: number;
@@ -623,16 +629,62 @@ export default function HomeScreen() {
   ]);
 
   useEffect(() => {
+    // Start native foreground service for background tracking
+    const startNativeService = async () => {
+      if (!driver?.id || !vehicle?.id) {
+        logger.warn('Cannot start native tracking: missing driver or vehicle');
+        return;
+      }
+
+      try {
+        const token = await getToken();
+        const backendUrl = getBackendAPI();
+
+        if (!token) {
+          logger.error('Cannot start native tracking: no auth token');
+          return;
+        }
+
+        logger.log('🚀 Starting native background location service...');
+        await startBackgroundLocationService({
+          driverId: driver.id,
+          vehicleId: vehicle.id,
+          authToken: token,
+          backendUrl: backendUrl,
+        });
+      } catch (err) {
+        logger.error('Error starting native tracking:', err);
+      }
+    };
+
+    // Debug: Log the state
+    logger.log('📍 Background tracking effect:', {
+      isActiveTrip,
+      hasDriver: !!driver?.id,
+      hasVehicle: !!vehicle?.id,
+      driverId: driver?.id,
+      vehicleId: vehicle?.id,
+    });
+
     if (isActiveTrip) {
-      // Start background location updates
+      logger.log('✅ Active trip detected - starting tracking services');
+
+      // Start JS-based location updates (for when app is in foreground)
       const watchId = setupBackgroundLocationUpdates();
       if (watchId !== null) {
         setLocationWatchId(watchId);
       }
 
       fetchLocationWithRetry();
+
+      // Start native foreground service (for true background tracking on Android)
+      if (Platform.OS === 'android') {
+        logger.log('📱 Android detected - calling startNativeService');
+        startNativeService();
+      }
     } else {
-      // Stop background location updates
+      logger.log('❌ No active trip - stopping tracking services');
+      // Stop JS-based location updates
       if (locationWatchId !== null) {
         try {
           Geolocation.clearWatch(locationWatchId);
@@ -641,9 +693,17 @@ export default function HomeScreen() {
           logger.error('Error clearing watch:', err);
         }
       }
+
+      // Stop native foreground service
+      if (Platform.OS === 'android') {
+        stopBackgroundLocationService().catch(err =>
+          logger.error('Error stopping native service:', err),
+        );
+      }
     }
 
     return () => {
+      // Cleanup JS-based watch
       if (locationWatchId !== null) {
         try {
           Geolocation.clearWatch(locationWatchId);
@@ -651,12 +711,21 @@ export default function HomeScreen() {
           logger.error('Error clearing watch in cleanup:', err);
         }
       }
+
+      // Stop native service on unmount
+      if (Platform.OS === 'android') {
+        stopBackgroundLocationService().catch(err =>
+          logger.error('Error stopping native service on cleanup:', err),
+        );
+      }
     };
   }, [
     isActiveTrip,
     setupBackgroundLocationUpdates,
     fetchLocationWithRetry,
     locationWatchId,
+    driver?.id,
+    vehicle?.id,
   ]);
 
   useEffect(() => {
