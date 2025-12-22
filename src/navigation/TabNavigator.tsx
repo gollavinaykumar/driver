@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { memo, useCallback, useMemo } from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
@@ -37,41 +37,60 @@ const tabIcons = {
   },
 } as const;
 
-const TabBarIcon = ({
-  routeName,
-  focused,
-  color,
-  size,
-}: {
-  routeName: keyof typeof tabIcons;
-  focused: boolean;
-  color: string;
-  size: number;
-}) => {
-  const iconConfig = tabIcons[routeName];
-  const IconComponent = iconConfig.component;
-  const iconName = focused ? iconConfig.active : iconConfig.inactive;
+const TabBarIcon = memo(
+  ({
+    routeName,
+    focused,
+    color,
+    size,
+  }: {
+    routeName: keyof typeof tabIcons;
+    focused: boolean;
+    color: string;
+    size: number;
+  }) => {
+    const iconConfig = tabIcons[routeName];
+    const IconComponent = iconConfig.component;
+    const iconName = focused ? iconConfig.active : iconConfig.inactive;
 
-  return <IconComponent name={iconName} size={size} color={color} />;
-};
+    return <IconComponent name={iconName} size={size} color={color} />;
+  },
+);
 
 const TabNavigator = ({ updateUserToken }: TabNavigatorProps) => {
+  const renderProfileScreen = useCallback(
+    (props: any) => (
+      <ProfileScreen {...props} updateUserToken={updateUserToken} />
+    ),
+    [updateUserToken],
+  );
+
+  const tabBarStyle = useMemo(
+    () => ({
+      backgroundColor: '#ffffff',
+      borderTopWidth: 1,
+      borderTopColor: '#e0e0e0',
+      height: 60,
+      paddingBottom: 8,
+      paddingTop: 8,
+    }),
+    [],
+  );
+
+  const tabBarLabelStyle = useMemo(
+    () => ({
+      fontSize: 12,
+      fontWeight: '500' as const,
+    }),
+    [],
+  );
+
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
         headerShown: false,
-        tabBarStyle: {
-          backgroundColor: '#ffffff',
-          borderTopWidth: 1,
-          borderTopColor: '#e0e0e0',
-          height: 60,
-          paddingBottom: 8,
-          paddingTop: 8,
-        },
-        tabBarLabelStyle: {
-          fontSize: 12,
-          fontWeight: '500',
-        },
+        tabBarStyle,
+        tabBarLabelStyle,
         tabBarIcon: ({ focused, color, size }) => (
           <TabBarIcon
             routeName={route.name as keyof typeof tabIcons}
@@ -104,9 +123,7 @@ const TabNavigator = ({ updateUserToken }: TabNavigatorProps) => {
           title: 'Profile',
         }}
       >
-        {props => (
-          <ProfileScreen {...props} updateUserToken={updateUserToken} />
-        )}
+        {renderProfileScreen}
       </Tab.Screen>
     </Tab.Navigator>
   );

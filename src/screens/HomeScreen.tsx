@@ -283,18 +283,15 @@ export default function HomeScreen() {
     [],
   );
 
-  // Debounced socket room management to prevent rapid join/leave cycles
   useEffect(() => {
     if (!socket || !driver?.id) {
       return;
     }
 
-    // Debounce room changes to prevent rapid fire
     const MIN_JOIN_INTERVAL = 5000; // 5 seconds minimum between changes
     const now = Date.now();
 
     if (now - lastJoinAttemptRef.current < MIN_JOIN_INTERVAL) {
-      // Too soon, schedule for later
       if (joinRoomTimeoutRef.current) {
         clearTimeout(joinRoomTimeoutRef.current);
       }
@@ -361,7 +358,6 @@ export default function HomeScreen() {
     };
   }, [socket, driver?.id]);
 
-  // Modify the setupBackgroundLocationUpdates function to emit location via socket
   const setupBackgroundLocationUpdates = useCallback((): number | null => {
     if (!isActiveTrip || !driver?.id) return null;
 
@@ -383,7 +379,6 @@ export default function HomeScreen() {
                 );
               });
 
-            // Send location to the tracking room via "sendDriverLocation" event
             if (
               driver?.id &&
               socket?.connected &&
@@ -459,7 +454,6 @@ export default function HomeScreen() {
     locationWatchId,
   ]);
 
-  // Also emit location when manually fetching location (not just in background updates)
   const fetchLocationWithRetry = useCallback(
     async (retryCount = 0): Promise<void> => {
       try {
@@ -494,7 +488,6 @@ export default function HomeScreen() {
                     );
                   }
 
-                  // Send location to tracking room when manually fetched
                   if (
                     driver?.id &&
                     socket?.connected &&
@@ -531,7 +524,6 @@ export default function HomeScreen() {
               error => {
                 logger.error('Location error:', error);
 
-                // Don't retry on permission denied
                 if (error.code === error.PERMISSION_DENIED) {
                   setLocation(
                     'Location permission denied. Please enable in settings.',
@@ -629,7 +621,6 @@ export default function HomeScreen() {
   ]);
 
   useEffect(() => {
-    // Start native foreground service for background tracking
     const startNativeService = async () => {
       if (!driver?.id || !vehicle?.id) {
         logger.warn('Cannot start native tracking: missing driver or vehicle');
@@ -657,19 +648,7 @@ export default function HomeScreen() {
       }
     };
 
-    // Debug: Log the state
-    logger.log('📍 Background tracking effect:', {
-      isActiveTrip,
-      hasDriver: !!driver?.id,
-      hasVehicle: !!vehicle?.id,
-      driverId: driver?.id,
-      vehicleId: vehicle?.id,
-    });
-
     if (isActiveTrip) {
-      logger.log('✅ Active trip detected - starting tracking services');
-
-      // Start JS-based location updates (for when app is in foreground)
       const watchId = setupBackgroundLocationUpdates();
       if (watchId !== null) {
         setLocationWatchId(watchId);
@@ -677,14 +656,10 @@ export default function HomeScreen() {
 
       fetchLocationWithRetry();
 
-      // Start native foreground service (for true background tracking on Android)
       if (Platform.OS === 'android') {
-        logger.log('📱 Android detected - calling startNativeService');
         startNativeService();
       }
     } else {
-      logger.log('❌ No active trip - stopping tracking services');
-      // Stop JS-based location updates
       if (locationWatchId !== null) {
         try {
           Geolocation.clearWatch(locationWatchId);
@@ -694,7 +669,6 @@ export default function HomeScreen() {
         }
       }
 
-      // Stop native foreground service
       if (Platform.OS === 'android') {
         stopBackgroundLocationService().catch(err =>
           logger.error('Error stopping native service:', err),
@@ -703,7 +677,6 @@ export default function HomeScreen() {
     }
 
     return () => {
-      // Cleanup JS-based watch
       if (locationWatchId !== null) {
         try {
           Geolocation.clearWatch(locationWatchId);
@@ -913,13 +886,12 @@ export default function HomeScreen() {
       const lastCoords = lastBackendLocationRef.current;
       const lastTime = lastBackendLocationTimeRef.current;
 
-      // Only send update if driver moved significantly OR enough time passed
       const MIN_TIME_DIFF_MS = 2 * 60 * 1000; // 2 minutes
       const MIN_DISTANCE_METERS = 300; // 300 meters
 
       if (lastCoords && lastTime) {
         const timeDiff = now - lastTime;
-        const dist = calculateDistanceMeters(lastCoords, coords); // Renamed to avoid shadowing
+        const dist = calculateDistanceMeters(lastCoords, coords);
 
         if (timeDiff < MIN_TIME_DIFF_MS && dist < MIN_DISTANCE_METERS) {
           return;

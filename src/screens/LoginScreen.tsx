@@ -369,7 +369,6 @@ export default function LoginScreen({ updateUserToken }: LoginScreenProps) {
                 onChangeText={setOtp}
                 keyboardType="number-pad"
                 maxLength={6}
-                textAlign="center"
                 editable={!otpLoading}
                 placeholderTextColor="#9ca3af"
               />
@@ -667,6 +666,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#1f2937',
     letterSpacing: 8,
+    textAlign: 'left',
   },
   resendContainer: {
     alignItems: 'center',

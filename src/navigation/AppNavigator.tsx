@@ -1,4 +1,3 @@
-// src/navigation/AppNavigator.tsx
 import 'react-native-gesture-handler';
 import React, { useState, useEffect } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
@@ -12,7 +11,6 @@ import TabNavigator from './TabNavigator';
 import Header from '../components/Header';
 import { getSocket } from '../utils/socket';
 
-// Define your root stack param list
 export type RootStackParamList = {
   Login: undefined;
   Main: undefined;
@@ -45,11 +43,10 @@ const AppNavigator = () => {
     checkLoginStatus();
   }, []);
 
-  // When userToken changes, attach it to socket and connect
   useEffect(() => {
     const socket = getSocket();
     if (userToken) {
-      socket.auth = { token: userToken }; // raw token, no Bearer
+      socket.auth = { token: userToken };
       if (!socket.connected) {
         socket.connect();
       }
